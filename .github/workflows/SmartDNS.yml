@@ -1,0 +1,136 @@
+name: 🚀 SmartDNS
+
+on:
+  workflow_dispatch:    # 🎮 手动触发
+  schedule:
+    - cron: "0 16 * * *"  # ⏰ 每天北京时间 0:00 自动运行 (UTC时间16:00)
+
+env:
+  REPO_URL: https://github.com/felixonmars/dnsmasq-china-list
+  REPO_BRANCH: master
+
+jobs:
+  config-builder:
+    name: 🔧构建 SmartDNS 规则
+    runs-on: ubuntu-22.04
+    
+    steps:
+      # =====================
+      # 🛠️ 环境初始化
+      # =====================
+      - name: "🔧 初始化环境"
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          echo "🗑️ 清理系统缓存..."
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          
+          echo "📦 更新软件源..."
+          sudo -E apt-get -qq update
+          
+          echo "🔧 安装编译工具..."
+          sudo -E apt-get -qq install make
+          
+          echo "🧹 清理系统空间..."
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          
+          echo "🌏 设置上海时区..."
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          
+          echo "📂 创建工作目录..."
+          sudo mkdir -p /DNS
+          sudo chown $USER:$GROUPS /DNS
+          echo "✅ 环境初始化完成"
+
+      # =====================
+      # 📥 数据获取
+      # =====================
+      - name: "📥 克隆规则仓库"
+        run: |
+          cd /DNS
+          echo "⏬ 正在克隆 $REPO_URL..."
+          git clone $REPO_URL -b $REPO_BRANCH dnsmasq-china-list --depth 1
+          echo "✅ 仓库克隆完成"
+
+      # =====================
+      # 🔨 规则编译
+      # =====================
+      - name: "🔨 编译国内域名规则"
+        run: |
+          cd /DNS/dnsmasq-china-list
+          echo "🛠️ 生成国内域名规则..."
+          make SERVER=cn SMARTDNS_SPEEDTEST_MODE=tcp:80 smartdns-domain-rules
+          echo "✅ 规则生成完成"
+
+      - name: "🇨🇳 生成中国列表规则"
+        run: |
+          cd /DNS/dnsmasq-china-list
+          echo "⏬ 下载中国域名列表..."
+          wget -q https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/china-list.txt -O chinalist.txt
+          
+          echo "🔄 转换为SmartDNS格式..."
+          sed -e "s|\(.*\)|domain-rules /\1/ -speed-check-mode tcp:80 -address - -nameserver cn|" chinalist.txt > chinalist.domain.smartdns.conf
+          echo "✅ 中国列表规则生成完成"
+
+      - name: "🌐 生成GFW列表规则"
+        run: |
+          cd /DNS/dnsmasq-china-list
+          echo "⏬ 下载GFW域名列表..."
+          wget -q https://raw.githubusercontent.com/Loyalsoldier/v2ray-rules-dat/release/gfw.txt -O gfwlist.txt
+          
+          echo "🔄 转换为SmartDNS格式..."
+          sed -e "s|\(.*\)|domain-rules /\1/ -speed-check-mode none -nameserver gfw|" gfwlist.txt > gfwlist.domain.smartdns.conf
+          echo "✅ GFW列表规则生成完成"
+
+      # =====================
+      # 🚀 结果发布
+      # =====================
+      - name: "📂 检出目标仓库"
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "📤 复制配置文件"
+        run: |
+          echo "📋 复制生成的配置文件..."
+          cp -rf /DNS/dnsmasq-china-list/*.domain.smartdns.conf ./
+          echo "✅ 配置文件复制完成"
+
+      - name: "🚀 提交更新"
+        run: |
+          # 设置时区为上海时间
+          export TZ='Asia/Shanghai'
+          
+          # 配置Git用户信息
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@users.noreply.github.com"
+          
+          # 添加所有变化文件
+          git add .
+          
+          # 检查是否有文件变化
+          if git diff --cached --quiet; then
+            echo "🔄 文件内容未变化，无需提交"
+          else
+            # 获取当前北京时间
+            CURRENT_TIME=$(date +'%Y-%m-%d %H:%M')
+            
+            # 提交更改
+            git commit -m "🔄 自动更新SmartDNS配置 [$CURRENT_TIME]"
+            
+            # 推送到仓库
+            git push origin HEAD:${{ github.ref_name }}
+            echo "🚀 SmartDNS配置已更新并推送到仓库！"
+          fi
+
+      # =====================
+      # 🧹 清理维护
+      # =====================
+      - name: "🧹 清理工作流历史"
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
