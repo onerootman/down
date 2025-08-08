@@ -1,0 +1,120 @@
+name: 📺 IPTV 列表
+
+on:
+  workflow_dispatch:    # 🎮 手动触发
+  schedule:
+    - cron: "0 */12 * * *"  # ⏰ 每12小时运行一次 (UTC时间)
+
+jobs:
+  iptv-updater:
+    name: 📺构建 IPTV 列表
+    runs-on: ubuntu-latest
+    
+    steps:
+      # =====================
+      # 🛠️ 环境初始化
+      # =====================
+      - name: "🔧 初始化环境"
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          echo "📦 更新软件源..."
+          sudo -E apt-get -qq update
+          
+          echo "🔧 安装必要工具..."
+          sudo -E apt-get -qq install curl sed
+          
+          echo "🧹 清理系统空间..."
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          
+          echo "🌏 设置上海时区..."
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          
+          echo "📂 创建工作目录..."
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+          echo "✅ 环境初始化完成"
+
+      # =====================
+      # 📥 数据获取
+      # =====================
+      - name: "📥 下载原始列表"
+        run: |
+          cd /workdir
+          echo "⏬ 正在下载原始IPTV列表..."
+          curl -s -o iptv-original.m3u https://raw.githubusercontent.com/Mursor/LIVE/refs/heads/main/iptv.m3u
+          
+          # 检查文件是否下载成功
+          if [ ! -s iptv-original.m3u ]; then
+            echo "❌ 文件下载失败！"
+            exit 1
+          fi
+          echo "✅ 下载完成，文件大小: $(du -h iptv-original.m3u | cut -f1)"
+
+      # =====================
+      # ✂️ 文件处理
+      # =====================
+      - name: "✂️ 处理M3U文件"
+        run: |
+          cd /workdir
+          echo "🔪 删除第2-5行内容..."
+          sed -i.bak -e '2,5d' iptv-original.m3u
+          
+          echo "🔄 重命名文件..."
+          mv iptv-original.m3u iptv.m3u
+          
+          echo "📏 处理后的行数: $(wc -l < iptv.m3u)"
+          echo "✅ 文件处理完成"
+
+      # =====================
+      # 🚀 结果发布
+      # =====================
+      - name: "📂 检出目标仓库"
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "📤 复制处理后的文件"
+        run: |
+          echo "📋 复制文件到仓库根目录..."
+          cp -f /workdir/iptv.m3u ./
+          echo "✅ 文件复制完成"
+
+      - name: "🚀 提交更新"
+        run: |
+          # 设置时区为上海时间
+          export TZ='Asia/Shanghai'
+          
+          # 配置Git用户信息
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@users.noreply.github.com"
+          
+          # 添加文件
+          git add iptv.m3u
+          
+          # 检查是否有文件变化
+          if git diff --cached --quiet; then
+            echo "🔄 文件内容未变化，无需提交"
+          else
+            # 获取当前北京时间
+            CURRENT_TIME=$(date +'%Y-%m-%d %H:%M')
+            
+            # 提交更改
+            git commit -m "🔄 自动更新IPTV列表 [$CURRENT_TIME]"
+            
+            # 推送到仓库
+            git push origin HEAD:${{ github.ref_name }}
+            echo "🚀 IPTV列表已更新并保存到仓库根目录！"
+          fi
+
+      # =====================
+      # 🧹 清理维护
+      # =====================
+      - name: "🧹 清理工作流历史"
+        uses: GitRML/delete-workflow-runs@main
+        with:
+          retain_days: 1
+          keep_minimum_runs: 3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
